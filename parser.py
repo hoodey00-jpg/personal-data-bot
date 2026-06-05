@@ -67,7 +67,7 @@ Rules:
         print(f"[parser] Response body: {response.text[:500]}")
 
         if response.status_code != 200:
-            print(f"[parser] OpenRouter error: {response.text}")
+            print(f"[parser] OpenRouter HTTP {response.status_code}: {response.text[:300]}")
             return None
 
         result = response.json()
@@ -95,8 +95,13 @@ Rules:
             "raw_input": text,
         }
 
+    except requests.exceptions.Timeout:
+        print(f"[parser] OpenRouter timeout!")
+        return None
     except Exception as e:
+        import traceback
         print(f"[parser] Parse error: {e}")
+        print(traceback.format_exc())
         return None
 
 def parse_image(file_path):
