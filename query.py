@@ -1,0 +1,82 @@
+from datetime import datetime, timedelta
+from sheets import get_monthly_total
+
+def format_monthly_summary(transactions):
+    """Format monthly summary for Telegram"""
+    if not transactions:
+        return "ไม่มีข้อมูลเดือนนี้"
+
+    now = datetime.now()
+    current_month_total = get_monthly_total(now.year, now.month, "expense")
+    current_income = get_monthly_total(now.year, now.month, "income")
+
+    msg = f"""
+📊 สรุปเดือนนี้ ({now.strftime("%B %Y")}):
+
+💸 รายจ่าย: {abs(current_month_total):,.0f} บาท
+💰 รายรับ: {current_income:,.0f} บาท
+📈 สุทธิ: {current_income + current_month_total:,.0f} บาท
+
+📝 ทำรายการ {len(transactions)} อัน
+    """
+    return msg.strip()
+
+def format_comparison(transactions):
+    """Compare this month vs last month"""
+    if not transactions:
+        return "ไม่มีข้อมูล"
+
+    now = datetime.now()
+    current_month = get_monthly_total(now.year, now.month, "expense")
+
+    # Last month
+    if now.month == 1:
+        last_year = now.year - 1
+        last_month = 12
+    else:
+        last_year = now.year
+        last_month = now.month - 1
+
+    prev_month = get_monthly_total(last_year, last_month, "expense")
+
+    if prev_month == 0:
+        change_pct = 0
+        change_text = "ไม่มีข้อมูล"
+    else:
+        change = current_month - prev_month
+        change_pct = (change / abs(prev_month)) * 100
+        if change < 0:
+            change_text = f"📉 ลดลง {abs(change):,.0f} บาท ({abs(change_pct):.1f}%)"
+        else:
+            change_text = f"📈 เพิ่มขึ้น {change:,.0f} บาท ({change_pct:.1f}%)"
+
+    msg = f"""
+📊 เทียบเดือนที่แล้ว:
+
+เดือนนี้: {abs(current_month):,.0f} บาท
+เดือนที่แล้ว: {abs(prev_month):,.0f} บาท
+
+{change_text}
+    """
+    return msg.strip()
+
+def get_top_merchants(transactions, limit=5):
+    """Get top merchants by spending"""
+    by_merchant = {}
+    for trans in transactions:
+        if trans["type"] == "expense" and trans["merchant"]:
+            merchant = trans["merchant"]
+            by_merchant[merchant] = by_merchant.get(merchant, 0) + abs(trans["amount"])
+
+    sorted_merchants = sorted(by_merchant.items(), key=lambda x: x[1], reverse=True)
+    return sorted_merchants[:limit]
+
+def get_spending_by_category(transactions):
+    """Get spending by category"""
+    by_category = {}
+    for trans in transactions:
+        if trans["type"] == "expense":
+            cat = trans["category"]
+            by_category[cat] = by_category.get(cat, 0) + abs(trans["amount"])
+
+    return sorted(by_category.items(), key=lambda x: x[1], reverse=True)
