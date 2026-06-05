@@ -1,11 +1,19 @@
 import os
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import requests
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+# Thailand timezone (UTC+7), independent of server clock.
+TH_TZ = timezone(timedelta(hours=7))
+
+
+def _today_th():
+    """Return today's date in Thailand timezone as YYYY-MM-DD."""
+    return datetime.now(TH_TZ).strftime("%Y-%m-%d")
 
 def parse_transaction(text=None, file_path=None, is_image=False):
     """
@@ -22,27 +30,29 @@ def parse_text(text):
     if not text or len(text.strip()) < 2:
         return None
 
-    prompt = f"""
-Parse Thai transaction: "{text}"
+    today = _today_th()
 
-Return ONLY valid JSON (no markdown, no explanation):
+    prompt = f"""วันนี้คือวันที่ {today} (รูปแบบ YYYY-MM-DD, เวลาประเทศไทย)
+
+แยกรายการเงินจากข้อความภาษาไทยนี้: "{text}"
+
+ตอบกลับเป็น JSON เท่านั้น ไม่ต้องมี markdown หรือคำอธิบาย:
 {{
-  "amount": number (positive for income, negative for expense),
-  "type": "income" or "expense",
-  "category": "food|transport|shopping|salary|other",
-  "merchant": "string or null",
-  "date": "YYYY-MM-DD",
-  "note": "string or null"
+  "amount": ตัวเลข (บวกถ้ารายรับ, ลบถ้ารายจ่าย),
+  "type": "income" หรือ "expense",
+  "category": "food|transport|shopping|bills|entertainment|health|salary|other",
+  "merchant": "ชื่อสิ่งที่ซื้อหรือร้าน หรือ null",
+  "date": "{today}",
+  "note": "บันทึกสั้นๆ เป็นภาษาไทย หรือ null"
 }}
 
-Rules:
-- If amount has no sign, default to expense (negative)
-- If text says "รับเงิน" or "เงินเดือน", it's income (positive)
-- Detect category from merchant/context
-- Use today's date if not specified
-- merchant = ร้านชื่อหรือ null
-- Keep note short, clear
-- Return null for empty fields
+กฎ:
+- ถ้าไม่ระบุเครื่องหมาย ให้ถือเป็นรายจ่าย (amount เป็นลบ)
+- ถ้ามีคำว่า "รับ", "ได้เงิน", "เงินเดือน", "โอนเข้า" = รายรับ (amount เป็นบวก)
+- merchant = สิ่งที่ซื้อ เช่น "กาแฟ 65" -> merchant คือ "กาแฟ"
+- เดา category จากบริบท เช่น กาแฟ/ข้าว = food, แท็กซี่/รถเมล์ = transport
+- date ใช้ {today} เสมอ (เว้นแต่ข้อความระบุวันอื่นชัดเจน)
+- note สรุปสั้นๆ เป็นภาษาไทย
 """
 
     try:
@@ -86,7 +96,7 @@ Rules:
             return None
 
         return {
-            "date": data.get("date", datetime.now().strftime("%Y-%m-%d")),
+            "date": data.get("date") or _today_th(),
             "amount": data.get("amount"),
             "type": data.get("type", "expense"),
             "category": data.get("category", "other"),
@@ -114,36 +124,38 @@ def parse_image(file_path):
 
         import base64
         image_data = base64.b64encode(response.content).decode()
+        today = _today_th()
 
-        prompt = """
-Read this receipt image and extract:
-- Total amount (ยอดรวม)
-- Merchant/Shop name
-- Date if visible
-- Category (food, shopping, etc)
+        prompt = f"""วันนี้คือวันที่ {today} (YYYY-MM-DD, เวลาประเทศไทย)
 
-Return ONLY valid JSON:
-{
-  "amount": number,
+อ่านสลิป/ใบเสร็จในรูปนี้ แล้วดึงข้อมูล:
+- ยอดเงินรวม (total)
+- ชื่อร้าน/ผู้รับเงิน
+- วันที่ในสลิป (ถ้าไม่เห็นชัด ใช้ {today})
+- ประเภท (food, shopping, transport, bills ฯลฯ)
+
+ตอบเป็น JSON เท่านั้น ไม่ต้องมี markdown:
+{{
+  "amount": ตัวเลข,
   "type": "expense",
-  "category": "string",
-  "merchant": "string",
-  "date": "YYYY-MM-DD",
-  "note": "string or null"
-}
+  "category": "food|transport|shopping|bills|entertainment|health|other",
+  "merchant": "ชื่อร้าน",
+  "date": "{today}",
+  "note": "บันทึกสั้นๆ เป็นภาษาไทย หรือ null"
+}}
 
-If can't read, return null.
+ถ้าอ่านไม่ออก ตอบ null
 """
 
         resp = requests.post(
             OPENROUTER_URL,
             headers={
                 "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "HTTP-Referer": "personal-data-bot",
+                "HTTP-Referer": "https://personal-data-bot-production.up.railway.app",
                 "X-Title": "Personal Data Bot",
             },
             json={
-                "model": "openrouter/auto",
+                "model": "anthropic/claude-haiku-4-5",
                 "messages": [
                     {
                         "role": "user",
@@ -153,9 +165,10 @@ If can't read, return null.
                                 "text": prompt,
                             },
                             {
-                                "type": "image",
-                                "image": image_data,
-                                "mimeType": "image/jpeg",
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{image_data}"
+                                },
                             },
                         ],
                     }
@@ -163,15 +176,17 @@ If can't read, return null.
                 "temperature": 0.2,
                 "max_tokens": 500,
             },
+            timeout=60,
         )
 
+        print(f"[parser-img] status: {resp.status_code}, body: {resp.text[:300]}")
         if resp.status_code != 200:
             return None
 
         result = resp.json()
         content = result["choices"][0]["message"]["content"].strip()
 
-        if content.startswith("```"):
+        if "```" in content:
             content = content.split("```")[1].strip()
             if content.startswith("json"):
                 content = content[4:].strip()
@@ -182,7 +197,7 @@ If can't read, return null.
             return None
 
         return {
-            "date": data.get("date", datetime.now().strftime("%Y-%m-%d")),
+            "date": data.get("date") or today,
             "amount": -abs(data.get("amount")),
             "type": "expense",
             "category": data.get("category", "other"),
