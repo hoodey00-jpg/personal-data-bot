@@ -54,7 +54,7 @@ Rules:
                 "X-Title": "Personal Data Bot",
             },
             json={
-                "model": "openrouter/auto",
+                "model": "anthropic/claude-haiku-4.5",
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.3,
             },
@@ -150,6 +150,7 @@ If can't read, return null.
                     }
                 ],
                 "temperature": 0.2,
+                "max_tokens": 500,
             },
         )
 
