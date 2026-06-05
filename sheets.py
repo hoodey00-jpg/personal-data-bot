@@ -9,27 +9,55 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 def get_sheets_service():
     """Get Google Sheets API service"""
+    import json
+    import base64
+
     creds = None
 
-    # Try to load credentials from environment
-    import json
+    # Preferred: base64-encoded JSON (avoids newline/quote corruption when
+    # pasting the service-account key into Railway env vars).
+    creds_b64 = os.getenv("GOOGLE_CREDENTIALS_B64")
     creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
 
-    if creds_json:
-        creds_dict = json.loads(creds_json)
-        creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-    else:
-        # Try to load from file
-        if os.path.exists("credentials.json"):
+    try:
+        if creds_b64:
+            decoded = base64.b64decode(creds_b64).decode("utf-8")
+            creds_dict = json.loads(decoded)
+            creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+        elif creds_json:
+            creds_dict = json.loads(creds_json)
+            creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+        elif os.path.exists("credentials.json"):
             creds = Credentials.from_service_account_file(
                 "credentials.json", scopes=SCOPES
             )
+    except Exception as e:
+        print(f"[sheets] credentials load error: {e}")
+        return None
 
     if creds:
-        service = build("sheets", "v4", credentials=creds)
-        return service
+        return build("sheets", "v4", credentials=creds)
 
     return None
+
+def ensure_tab():
+    """Create 'Transactions' tab if it doesn't exist"""
+    service = get_sheets_service()
+    if not service:
+        return False
+    try:
+        meta = service.spreadsheets().get(spreadsheetId=SHEET_ID).execute()
+        titles = [s["properties"]["title"] for s in meta.get("sheets", [])]
+        if "Transactions" not in titles:
+            service.spreadsheets().batchUpdate(
+                spreadsheetId=SHEET_ID,
+                body={"requests": [{"addSheet": {"properties": {"title": "Transactions"}}}]},
+            ).execute()
+            print("[sheets] created Transactions tab")
+        return True
+    except Exception as e:
+        print(f"[sheets] ensure_tab error: {e}")
+        return False
 
 def ensure_header():
     """Ensure header row exists in sheet"""
@@ -38,6 +66,7 @@ def ensure_header():
         return False
 
     try:
+        ensure_tab()
         sheet = service.spreadsheets()
         request = sheet.values().get(
             spreadsheetId=SHEET_ID, range="Transactions!A1:G1"
