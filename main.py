@@ -2,7 +2,7 @@ import os
 import json
 import logging
 from flask import Flask, request
-from parser import parse_transaction
+from transaction_parser import parse_transaction
 from sheets import write_transaction, query_transactions
 from query import format_monthly_summary, format_comparison
 
