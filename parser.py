@@ -46,36 +46,42 @@ Rules:
 """
 
     try:
+        print(f"[parser] Calling OpenRouter with key: {OPENROUTER_API_KEY[:20] if OPENROUTER_API_KEY else 'NONE'}...")
         response = requests.post(
             OPENROUTER_URL,
             headers={
                 "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "HTTP-Referer": "personal-data-bot",
+                "HTTP-Referer": "https://personal-data-bot-production.up.railway.app",
                 "X-Title": "Personal Data Bot",
             },
             json={
-                "model": "anthropic/claude-haiku-4.5",
+                "model": "anthropic/claude-haiku-4-5",
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.3,
+                "max_tokens": 300,
             },
+            timeout=30,
         )
 
+        print(f"[parser] Response status: {response.status_code}")
+        print(f"[parser] Response body: {response.text[:500]}")
+
         if response.status_code != 200:
-            print(f"OpenRouter error: {response.text}")
+            print(f"[parser] OpenRouter error: {response.text}")
             return None
 
         result = response.json()
         content = result["choices"][0]["message"]["content"].strip()
+        print(f"[parser] Content: {content}")
 
         # Clean markdown if present
-        if content.startswith("```"):
+        if "```" in content:
             content = content.split("```")[1].strip()
             if content.startswith("json"):
                 content = content[4:].strip()
 
         data = json.loads(content)
 
-        # Validate
         if not data.get("amount") or data.get("amount") == 0:
             return None
 
@@ -90,7 +96,7 @@ Rules:
         }
 
     except Exception as e:
-        print(f"Parse error: {e}")
+        print(f"[parser] Parse error: {e}")
         return None
 
 def parse_image(file_path):
