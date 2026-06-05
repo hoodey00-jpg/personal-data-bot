@@ -5,7 +5,7 @@ from datetime import datetime
 import requests
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-OPENROUTER_URL = "https://openrouter.io/api/v1/chat/completions"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 def parse_transaction(text=None, file_path=None, is_image=False):
     """
