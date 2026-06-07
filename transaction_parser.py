@@ -32,6 +32,29 @@ def parse_text(text):
 
     today = _today_th()
 
+    prompt = f"""วันนี้คือวันที่ {today} (รูปแบบ YYYY-MM-DD, เวลาประเทศไทย)
+
+แยกรายการเงินจากข้อความภาษาไทยนี้: "{text}"
+
+ตอบกลับเป็น JSON เท่านั้น ไม่ต้องมี markdown หรือคำอธิบาย:
+{{
+  "amount": ตัวเลข (บวกถ้ารายรับ, ลบถ้ารายจ่าย),
+  "type": "income" หรือ "expense",
+  "category": "food|transport|shopping|bills|entertainment|health|salary|other",
+  "merchant": "ชื่อสิ่งที่ซื้อหรือร้าน หรือ null",
+  "date": "{today}",
+  "note": "บันทึกสั้นๆ เป็นภาษาไทย หรือ null"
+}}
+
+กฎ:
+- ถ้าไม่ระบุเครื่องหมาย ให้ถือเป็นรายจ่าย (amount เป็นลบ)
+- ถ้ามีคำว่า "รับ", "ได้เงิน", "เงินเดือน", "โอนเข้า" = รายรับ (amount เป็นบวก)
+- merchant = สิ่งที่ซื้อ เช่น "กาแฟ 65" -> merchant คือ "กาแฟ"
+- เดา category จากบริบท เช่น กาแฟ/ข้าว = food, แท็กซี่/รถเมล์ = transport
+- date ใช้ {today} เสมอ (เว้นแต่ข้อความระบุวันอื่นชัดเจน)
+- note สรุปสั้นๆ เป็นภาษาไทย
+"""
+
     try:
         print(f"[parser] Calling OpenRouter with key: {OPENROUTER_API_KEY[:20] if OPENROUTER_API_KEY else 'NONE'}...")
         response = requests.post(
@@ -43,16 +66,7 @@ def parse_text(text):
             },
             json={
                 "model": "deepseek/deepseek-v4-flash",
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": 'แยกรายการเงินไทย → JSON: {"amount"(ลบ=จ่าย/บวก=รับ),"type"(income/expense),"category"(food/transport/shopping/bills/entertainment/health/salary/other),"merchant","date","note"} ไม่มี markdown. รับ/เงินเดือน/โอนเข้า=income อื่น=expense merchant=สิ่งที่ซื้อหรือร้าน',
-                    },
-                    {
-                        "role": "user",
-                        "content": f"{today} | {text}",
-                    },
-                ],
+                "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.3,
                 "max_tokens": 300,
             },
@@ -112,6 +126,27 @@ def parse_image(file_path):
         image_data = base64.b64encode(response.content).decode()
         today = _today_th()
 
+        prompt = f"""วันนี้คือวันที่ {today} (YYYY-MM-DD, เวลาประเทศไทย)
+
+อ่านสลิป/ใบเสร็จในรูปนี้ แล้วดึงข้อมูล:
+- ยอดเงินรวม (total)
+- ชื่อร้าน/ผู้รับเงิน
+- วันที่ในสลิป (ถ้าไม่เห็นชัด ใช้ {today})
+- ประเภท (food, shopping, transport, bills ฯลฯ)
+
+ตอบเป็น JSON เท่านั้น ไม่ต้องมี markdown:
+{{
+  "amount": ตัวเลข,
+  "type": "expense",
+  "category": "food|transport|shopping|bills|entertainment|health|other",
+  "merchant": "ชื่อร้าน",
+  "date": "{today}",
+  "note": "บันทึกสั้นๆ เป็นภาษาไทย หรือ null"
+}}
+
+ถ้าอ่านไม่ออก ตอบ null
+"""
+
         resp = requests.post(
             OPENROUTER_URL,
             headers={
@@ -123,15 +158,11 @@ def parse_image(file_path):
                 "model": "deepseek/deepseek-v4-flash",
                 "messages": [
                     {
-                        "role": "system",
-                        "content": 'อ่านสลิป/ใบเสร็จ → JSON: {"amount","type":"expense","category"(food/transport/shopping/bills/entertainment/health/other),"merchant","date","note"} ไม่มี markdown. ถ้าอ่านไม่ออกตอบ null',
-                    },
-                    {
                         "role": "user",
                         "content": [
                             {
                                 "type": "text",
-                                "text": f"date={today}",
+                                "text": prompt,
                             },
                             {
                                 "type": "image_url",
@@ -140,7 +171,7 @@ def parse_image(file_path):
                                 },
                             },
                         ],
-                    },
+                    }
                 ],
                 "temperature": 0.2,
                 "max_tokens": 500,
