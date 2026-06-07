@@ -65,7 +65,7 @@ def parse_text(text):
                 "X-Title": "Personal Data Bot",
             },
             json={
-                "model": "anthropic/claude-haiku-4-5",
+                "model": "deepseek/deepseek-v4-flash",
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.3,
                 "max_tokens": 300,
@@ -155,7 +155,7 @@ def parse_image(file_path):
                 "X-Title": "Personal Data Bot",
             },
             json={
-                "model": "anthropic/claude-haiku-4-5",
+                "model": "deepseek/deepseek-v4-flash",
                 "messages": [
                     {
                         "role": "user",
