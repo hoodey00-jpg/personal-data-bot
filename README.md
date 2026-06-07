@@ -62,6 +62,6 @@ curl -X POST https://api.telegram.org/botBOT_TOKEN/setWebhook \
 
 ## Tech Stack
 - Flask (webhook)
-- OpenRouter API (LLM + vision)
+- OpenRouter API — model `deepseek/deepseek-v4-flash` (text + vision)
 - Google Sheets API
 - Railway (hosting)
