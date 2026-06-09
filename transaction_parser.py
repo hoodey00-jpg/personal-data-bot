@@ -15,6 +15,48 @@ def _today_th():
     """Return today's date in Thailand timezone as YYYY-MM-DD."""
     return datetime.now(TH_TZ).strftime("%Y-%m-%d")
 
+def classify_intent(text):
+    """Classify user message intent. Returns one of:
+    query_today | query_month | query_compare | save_transaction | help | unknown
+    """
+    prompt = f"""จำแนกความตั้งใจของข้อความภาษาไทยนี้: "{text}"
+
+ตอบด้วย label เดียวเท่านั้น (ห้ามมีคำอื่น):
+- query_today  → ถามยอดวันนี้ เช่น "วันนี้ใช้ไปเท่าไหร่" "สรุปวันนี้" "ใช้เงินไปกี่บาทแล้ว"
+- query_month  → ถามยอดเดือนนี้ เช่น "เดือนนี้จ่ายไปเท่าไหร่" "สรุปเดือนนี้" "ค่าใช้จ่ายเดือนนี้"
+- query_compare → เปรียบเทียบเดือน เช่น "เทียบเดือนที่แล้ว" "เดือนนี้กับเดือนก่อน"
+- save_transaction → บันทึกรายการเงิน เช่น "กาแฟ 65" "รับเงินเดือน 30000" "ข้าว 80"
+- help → ขอความช่วยเหลือ เช่น "help" "วิธีใช้" "ใช้ยังไง"
+- unknown → ไม่ตรงกับอะไรข้างบน"""
+
+    try:
+        response = requests.post(
+            OPENROUTER_URL,
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "HTTP-Referer": "https://personal-data-bot-production.up.railway.app",
+                "X-Title": "Personal Data Bot",
+            },
+            json={
+                "model": "deepseek/deepseek-v4-flash",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+                "max_tokens": 20,
+            },
+            timeout=15,
+        )
+        if response.status_code != 200:
+            return "save_transaction"
+        content = response.json()["choices"][0]["message"]["content"].strip().lower()
+        valid = {"query_today", "query_month", "query_compare", "save_transaction", "help", "unknown"}
+        for label in valid:
+            if label in content:
+                return label
+        return "save_transaction"
+    except Exception:
+        return "save_transaction"
+
+
 def parse_transaction(text=None, file_path=None, is_image=False):
     """
     Parse transaction from text or image
