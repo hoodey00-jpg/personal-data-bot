@@ -41,6 +41,9 @@ def webhook():
             response = format_comparison(transactions)
             send_message(chat_id, response)
 
+        elif text.lower() == "chatid":
+            send_message(chat_id, f"Your chat ID: {chat_id}")
+
         elif text.lower() == "help":
             help_text = """
 📝 ใช้ให้คุ้มสุด:
