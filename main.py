@@ -3,7 +3,8 @@ import json
 import logging
 from flask import Flask, request
 from transaction_parser import parse_transaction
-from sheets import write_transaction, query_transactions
+from datetime import datetime, timedelta, timezone
+from sheets import write_transaction, query_transactions, compute_daily_totals, write_daily_summary
 from query import format_monthly_summary, format_comparison
 
 logging.basicConfig(level=logging.INFO)
@@ -13,6 +14,9 @@ app = Flask(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+CRON_SECRET = os.getenv("CRON_SECRET")
+OWNER_CHAT_ID = os.getenv("OWNER_CHAT_ID")
+TH_TZ = timezone(timedelta(hours=7))
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -117,6 +121,38 @@ def format_result(result):
     amount = result.get("amount", "?")
     merchant = result.get("merchant", "-")
     return f"{date} | {amount} บาท | {merchant}"
+
+@app.route("/cron/daily", methods=["POST"])
+def cron_daily():
+    """Called by GitHub Actions cron at 23:59 TH every day"""
+    auth = request.headers.get("Authorization", "")
+    if not CRON_SECRET or auth != f"Bearer {CRON_SECRET}":
+        return {"error": "unauthorized"}, 401
+
+    date_str = datetime.now(TH_TZ).strftime("%Y-%m-%d")
+    income, expense = compute_daily_totals(date_str)
+
+    if income == 0 and expense == 0:
+        logger.info(f"[cron] {date_str} no transactions, skipped")
+        return {"ok": True, "date": date_str, "skipped": True}
+
+    write_daily_summary(date_str, income, expense)
+
+    if OWNER_CHAT_ID:
+        net = income - expense
+        sign = "🟢" if net >= 0 else "🔴"
+        msg = (
+            f"📊 สรุปวันที่ {date_str}\n\n"
+            f"💰 รายรับ:  {income:,.0f} บาท\n"
+            f"💸 รายจ่าย: {expense:,.0f} บาท\n"
+            f"──────────────────\n"
+            f"{sign} คงเหลือ: {net:,.0f} บาท"
+        )
+        send_message(OWNER_CHAT_ID, msg)
+
+    logger.info(f"[cron] {date_str} income={income} expense={expense}")
+    return {"ok": True, "date": date_str, "income": income, "expense": expense}
+
 
 @app.route("/health", methods=["GET"])
 def health():
