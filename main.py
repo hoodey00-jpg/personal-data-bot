@@ -4,7 +4,7 @@ import logging
 from flask import Flask, request
 from transaction_parser import parse_transaction
 from datetime import datetime, timedelta, timezone
-from sheets import write_transaction, query_transactions, compute_daily_totals, write_daily_summary
+from sheets import write_transaction, query_transactions, compute_daily_totals, write_daily_summary, ensure_daily_summary_tab
 from query import format_monthly_summary, format_comparison
 
 logging.basicConfig(level=logging.INFO)
@@ -17,6 +17,8 @@ TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 CRON_SECRET = os.getenv("CRON_SECRET")
 OWNER_CHAT_ID = os.getenv("OWNER_CHAT_ID")
 TH_TZ = timezone(timedelta(hours=7))
+
+ensure_daily_summary_tab()
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -45,24 +47,39 @@ def webhook():
             response = format_comparison(transactions)
             send_message(chat_id, response)
 
+        elif text.lower().startswith("สรุปวัน"):
+            date_str = datetime.now(TH_TZ).strftime("%Y-%m-%d")
+            income, expense = compute_daily_totals(date_str)
+            if income == 0 and expense == 0:
+                send_message(chat_id, f"📭 วันที่ {date_str} ยังไม่มีรายการ")
+            else:
+                net = income - expense
+                sign = "🟢" if net >= 0 else "🔴"
+                msg = (
+                    f"📊 สรุปวันที่ {date_str}\n\n"
+                    f"💰 รายรับ:  {income:,.0f} บาท\n"
+                    f"💸 รายจ่าย: {expense:,.0f} บาท\n"
+                    f"──────────────────\n"
+                    f"{sign} คงเหลือ: {net:,.0f} บาท"
+                )
+                send_message(chat_id, msg)
+
         elif text.lower() == "chatid":
             send_message(chat_id, f"Your chat ID: {chat_id}")
 
         elif text.lower() == "help":
-            help_text = """
-📝 ใช้ให้คุ้มสุด:
-
-💰 บันทึกรายจ่าย:
-  "กาแฟ 65" → auto detect expense
-  "รับเงิน 5000" → auto detect income
-  "ข้าว 80 ร้านแมว"
-
-📸 ส่งรูปสลิป → อ่านอัตโนมัติ
-
-📊 ถามค่าใช้จ่าย:
-  "เดือนนี้จ่ายไปเท่าไหร่"
-  "เทียบเดือนที่แล้ว"
-            """
+            help_text = (
+                "📝 ใช้ให้คุ้มสุด:\n\n"
+                "💰 บันทึกรายการ:\n"
+                "  \"กาแฟ 65\" → รายจ่าย\n"
+                "  \"รับเงิน 5000\" → รายรับ\n"
+                "  \"ข้าว 80 ร้านแมว\"\n\n"
+                "📸 ส่งรูปสลิป → อ่านอัตโนมัติ\n\n"
+                "📊 ถามสรุป:\n"
+                "  \"สรุปวันนี้\" → ยอดวันนี้\n"
+                "  \"เดือนนี้จ่ายไปเท่าไหร่\"\n"
+                "  \"เทียบเดือนที่แล้ว\""
+            )
             send_message(chat_id, help_text)
 
         elif photo:
