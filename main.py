@@ -3,9 +3,10 @@ import json
 import logging
 from flask import Flask, request
 from transaction_parser import parse_transaction, classify_intent
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from sheets import write_transaction, query_transactions, compute_daily_totals
 from query import format_monthly_summary, format_comparison
+from tz import TH_TZ
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -14,7 +15,6 @@ app = Flask(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
-TH_TZ = timezone(timedelta(hours=7))
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -85,6 +85,9 @@ def webhook():
                     "  \"เดือนนี้จ่ายไปกี่บาท\"\n"
                     "  \"เทียบเดือนที่แล้ว\""
                 ))
+
+            elif intent == "api_error":
+                send_message(chat_id, "🤖 ระบบ AI ขัดข้องชั่วคราว ลองพิมพ์ใหม่อีกครั้งใน 1 นาที")
 
             elif intent == "save_transaction":
                 result = parse_transaction(text)

@@ -1,14 +1,15 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 from sheets import get_monthly_total
+from tz import TH_TZ
 
 def format_monthly_summary(transactions):
     """Format monthly summary for Telegram"""
     if not transactions:
         return "ไม่มีข้อมูลเดือนนี้"
 
-    now = datetime.now()
-    current_month_total = get_monthly_total(now.year, now.month, "expense")
-    current_income = get_monthly_total(now.year, now.month, "income")
+    now = datetime.now(TH_TZ)
+    current_month_total = get_monthly_total(transactions, now.year, now.month, "expense")
+    current_income = get_monthly_total(transactions, now.year, now.month, "income")
 
     msg = f"""
 📊 สรุปเดือนนี้ ({now.strftime("%B %Y")}):
@@ -26,8 +27,8 @@ def format_comparison(transactions):
     if not transactions:
         return "ไม่มีข้อมูล"
 
-    now = datetime.now()
-    current_month = get_monthly_total(now.year, now.month, "expense")
+    now = datetime.now(TH_TZ)
+    current_month = get_monthly_total(transactions, now.year, now.month, "expense")
 
     # Last month
     if now.month == 1:
@@ -37,7 +38,7 @@ def format_comparison(transactions):
         last_year = now.year
         last_month = now.month - 1
 
-    prev_month = get_monthly_total(last_year, last_month, "expense")
+    prev_month = get_monthly_total(transactions, last_year, last_month, "expense")
 
     if prev_month == 0:
         change_pct = 0

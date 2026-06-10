@@ -1,14 +1,15 @@
 import os
 import json
 import re
-from datetime import datetime, timezone, timedelta
+import logging
+from datetime import datetime
 import requests
+from tz import TH_TZ
+
+logger = logging.getLogger(__name__)
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-
-# Thailand timezone (UTC+7), independent of server clock.
-TH_TZ = timezone(timedelta(hours=7))
 
 
 def _today_th():
@@ -17,7 +18,7 @@ def _today_th():
 
 def classify_intent(text):
     """Classify user message intent. Returns one of:
-    query_today | query_month | query_compare | save_transaction | help | unknown
+    query_today | query_month | query_compare | save_transaction | help | unknown | api_error
     """
     prompt = f"""จำแนกความตั้งใจของข้อความภาษาไทยนี้: "{text}"
 
@@ -46,7 +47,7 @@ def classify_intent(text):
             timeout=15,
         )
         if response.status_code != 200:
-            return "save_transaction"
+            return "api_error"
         content = response.json()["choices"][0]["message"]["content"].strip().lower()
         valid = {"query_today", "query_month", "query_compare", "save_transaction", "help", "unknown"}
         for label in valid:
@@ -54,7 +55,7 @@ def classify_intent(text):
                 return label
         return "save_transaction"
     except Exception:
-        return "save_transaction"
+        return "api_error"
 
 
 def parse_transaction(text=None, file_path=None, is_image=False):
@@ -98,7 +99,6 @@ def parse_text(text):
 """
 
     try:
-        print(f"[parser] Calling OpenRouter with key: {OPENROUTER_API_KEY[:20] if OPENROUTER_API_KEY else 'NONE'}...")
         response = requests.post(
             OPENROUTER_URL,
             headers={
@@ -115,16 +115,15 @@ def parse_text(text):
             timeout=30,
         )
 
-        print(f"[parser] Response status: {response.status_code}")
-        print(f"[parser] Response body: {response.text[:500]}")
+        logger.debug(f"[parser] Response status: {response.status_code}")
 
         if response.status_code != 200:
-            print(f"[parser] OpenRouter HTTP {response.status_code}: {response.text[:300]}")
+            logger.warning(f"[parser] OpenRouter HTTP {response.status_code}: {response.text[:300]}")
             return None
 
         result = response.json()
         content = result["choices"][0]["message"]["content"].strip()
-        print(f"[parser] Content: {content}")
+        logger.debug(f"[parser] Content: {content}")
 
         # Clean markdown if present
         if "```" in content:
@@ -148,12 +147,10 @@ def parse_text(text):
         }
 
     except requests.exceptions.Timeout:
-        print(f"[parser] OpenRouter timeout!")
+        logger.warning("[parser] OpenRouter timeout!")
         return None
     except Exception as e:
-        import traceback
-        print(f"[parser] Parse error: {e}")
-        print(traceback.format_exc())
+        logger.exception(f"[parser] Parse error: {e}")
         return None
 
 def parse_image(file_path):
@@ -221,7 +218,7 @@ def parse_image(file_path):
             timeout=60,
         )
 
-        print(f"[parser-img] status: {resp.status_code}, body: {resp.text[:300]}")
+        logger.debug(f"[parser-img] status: {resp.status_code}")
         if resp.status_code != 200:
             return None
 
@@ -249,5 +246,5 @@ def parse_image(file_path):
         }
 
     except Exception as e:
-        print(f"Image parse error: {e}")
+        logger.exception(f"Image parse error: {e}")
         return None

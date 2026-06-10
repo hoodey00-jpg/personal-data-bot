@@ -87,15 +87,21 @@ def ensure_header():
         print(f"Header error: {e}")
         return False
 
+_header_checked = False
+
 def write_transaction(transaction):
     """Write transaction to Google Sheet"""
+    global _header_checked
+
     service = get_sheets_service()
     if not service:
         print("No Google credentials found")
         return False
 
     try:
-        ensure_header()
+        if not _header_checked:
+            ensure_header()
+            _header_checked = True
         sheet = service.spreadsheets()
 
         # Prepare row
@@ -177,26 +183,34 @@ def query_transactions(days=None):
         return []
 
 def compute_daily_totals(date_str):
-    """Sum income and expense for a given date. Returns (income, expense) as positive floats."""
-    transactions = query_transactions()
-    income = 0.0
-    expense = 0.0
-    for t in transactions:
-        if t["date"] != date_str:
-            continue
-        if t["type"] == "income":
-            income += t["amount"]
-        elif t["type"] == "expense":
-            expense += abs(t["amount"])
-    return income, expense
+    """Sum income and expense for a given date. Returns (income, expense) as positive floats.
+    Reads from the Daily Summary tab (formula-computed) instead of scanning all Transactions."""
+    service = get_sheets_service()
+    if not service:
+        return 0.0, 0.0
+
+    try:
+        result = service.spreadsheets().values().get(
+            spreadsheetId=SHEET_ID, range="Daily Summary!A:C"
+        ).execute()
+        values = result.get("values", [])
+
+        for row in values[1:]:
+            if len(row) >= 3 and row[0] == date_str:
+                income = float(row[1]) if row[1] else 0.0
+                expense = float(row[2]) if row[2] else 0.0
+                return income, expense
+
+        return 0.0, 0.0
+    except Exception as e:
+        print(f"compute_daily_totals error: {e}")
+        return 0.0, 0.0
 
 
-def get_monthly_total(year, month, trans_type="expense"):
-    """Get total for specific month
+def get_monthly_total(transactions, year, month, trans_type="expense"):
+    """Get total for specific month from an already-fetched transactions list
     trans_type: 'expense', 'income', or 'all'
     """
-    transactions = query_transactions()
-
     total = 0
     for trans in transactions:
         if trans["type"] == trans_type or trans_type == "all":
