@@ -176,35 +176,6 @@ def query_transactions(days=None):
         print(f"Query error: {e}")
         return []
 
-def ensure_daily_summary_tab():
-    """Create 'Daily Summary' tab + header row if not exists"""
-    service = get_sheets_service()
-    if not service:
-        return False
-    try:
-        meta = service.spreadsheets().get(spreadsheetId=SHEET_ID).execute()
-        titles = [s["properties"]["title"] for s in meta.get("sheets", [])]
-        if "Daily Summary" not in titles:
-            service.spreadsheets().batchUpdate(
-                spreadsheetId=SHEET_ID,
-                body={"requests": [{"addSheet": {"properties": {"title": "Daily Summary"}}}]},
-            ).execute()
-            print("[sheets] created Daily Summary tab")
-        sheet = service.spreadsheets()
-        result = sheet.values().get(spreadsheetId=SHEET_ID, range="Daily Summary!A1:D1").execute()
-        if not result.get("values"):
-            sheet.values().update(
-                spreadsheetId=SHEET_ID,
-                range="Daily Summary!A1:D1",
-                valueInputOption="RAW",
-                body={"values": [["date", "total_income", "total_expense", "net"]]},
-            ).execute()
-        return True
-    except Exception as e:
-        print(f"[sheets] ensure_daily_summary_tab error: {e}")
-        return False
-
-
 def compute_daily_totals(date_str):
     """Sum income and expense for a given date. Returns (income, expense) as positive floats."""
     transactions = query_transactions()
@@ -218,26 +189,6 @@ def compute_daily_totals(date_str):
         elif t["type"] == "expense":
             expense += abs(t["amount"])
     return income, expense
-
-
-def write_daily_summary(date_str, income, expense):
-    """Append one row to Daily Summary tab"""
-    service = get_sheets_service()
-    if not service:
-        return False
-    try:
-        ensure_daily_summary_tab()
-        net = income - expense
-        service.spreadsheets().values().append(
-            spreadsheetId=SHEET_ID,
-            range="Daily Summary!A:D",
-            valueInputOption="RAW",
-            body={"values": [[date_str, income, expense, net]]},
-        ).execute()
-        return True
-    except Exception as e:
-        print(f"[sheets] write_daily_summary error: {e}")
-        return False
 
 
 def get_monthly_total(year, month, trans_type="expense"):
