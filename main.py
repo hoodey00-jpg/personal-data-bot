@@ -40,8 +40,10 @@ def webhook():
             if file_path:
                 result = parse_transaction(file_path=file_path, is_image=True)
                 if result:
-                    write_transaction(result)
-                    send_message(chat_id, f"✅ บันทึกเสร็จ\n{format_result(result)}")
+                    if write_transaction(result):
+                        send_message(chat_id, f"✅ บันทึกเสร็จ\n{format_result(result)}")
+                    else:
+                        send_message(chat_id, "❌ บันทึกลง Sheet ไม่สำเร็จ ลองใหม่อีกครั้ง")
                 else:
                     send_message(chat_id, "❌ อ่านรูปไม่ได้ ลองใหม่หรือพิมพ์มือ")
 
@@ -92,8 +94,10 @@ def webhook():
             elif intent == "save_transaction":
                 result = parse_transaction(text)
                 if result:
-                    write_transaction(result)
-                    send_message(chat_id, f"✅ บันทึกเสร็จ\n{format_result(result)}")
+                    if write_transaction(result):
+                        send_message(chat_id, f"✅ บันทึกเสร็จ\n{format_result(result)}")
+                    else:
+                        send_message(chat_id, "❌ บันทึกลง Sheet ไม่สำเร็จ ลองใหม่อีกครั้ง")
                 else:
                     send_message(chat_id, "❌ ไม่เข้าใจ ลองใหม่เช่น 'กาแฟ 65' หรือ 'รับเงิน 5000'")
 

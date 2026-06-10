@@ -21,6 +21,7 @@ def get_sheets_service():
 
     try:
         if creds_b64:
+            creds_b64 = creds_b64.strip().lstrip("﻿")
             decoded = base64.b64decode(creds_b64).decode("utf-8")
             creds_dict = json.loads(decoded)
             creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
