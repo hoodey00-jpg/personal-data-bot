@@ -10,11 +10,26 @@ logger = logging.getLogger(__name__)
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_MODEL = "google/gemma-3-12b-it"
 
 
 def _today_th():
     """Return today's date in Thailand timezone as YYYY-MM-DD."""
     return datetime.now(TH_TZ).strftime("%Y-%m-%d")
+
+def _extract_json(content):
+    """Extract and parse the first JSON object found in the model's reply."""
+    match = re.search(r"\{.*\}", content, re.DOTALL)
+    if not match:
+        raise ValueError(f"No JSON object found in: {content[:200]}")
+    return json.loads(match.group(0))
+
+def _normalize_amount(data):
+    """Make amount sign match type (type is the source of truth)."""
+    amount = abs(data.get("amount") or 0)
+    if data.get("type") == "income":
+        return amount, "income"
+    return -amount, "expense"
 
 def classify_intent(text):
     """Classify user message intent. Returns one of:
@@ -30,32 +45,36 @@ def classify_intent(text):
 - help → ขอความช่วยเหลือ เช่น "help" "วิธีใช้" "ใช้ยังไง"
 - unknown → ไม่ตรงกับอะไรข้างบน"""
 
-    try:
-        response = requests.post(
-            OPENROUTER_URL,
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "HTTP-Referer": "https://personal-data-bot-production.up.railway.app",
-                "X-Title": "Personal Data Bot",
-            },
-            json={
-                "model": "deepseek/deepseek-v4-flash",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.1,
-                "max_tokens": 20,
-            },
-            timeout=15,
-        )
-        if response.status_code != 200:
-            return "api_error"
-        content = response.json()["choices"][0]["message"]["content"].strip().lower()
-        valid = {"query_today", "query_month", "query_compare", "save_transaction", "help", "unknown"}
-        for label in valid:
-            if label in content:
-                return label
-        return "save_transaction"
-    except Exception:
-        return "api_error"
+    for attempt in range(2):
+        try:
+            response = requests.post(
+                OPENROUTER_URL,
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "HTTP-Referer": "https://personal-data-bot-production.up.railway.app",
+                    "X-Title": "Personal Data Bot",
+                },
+                json={
+                    "model": OPENROUTER_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.1,
+                    "max_tokens": 20,
+                },
+                timeout=15,
+            )
+            if response.status_code != 200:
+                logger.warning(f"[intent] OpenRouter HTTP {response.status_code}: {response.text[:300]}")
+                continue
+            content = response.json()["choices"][0]["message"]["content"].strip().lower()
+            valid = {"query_today", "query_month", "query_compare", "save_transaction", "help", "unknown"}
+            for label in valid:
+                if label in content:
+                    return label
+            return "save_transaction"
+        except Exception as e:
+            logger.warning(f"[intent] error (attempt {attempt + 1}): {e}")
+            continue
+    return "api_error"
 
 
 def parse_transaction(text=None, file_path=None, is_image=False):
@@ -98,60 +117,59 @@ def parse_text(text):
 - note สรุปสั้นๆ เป็นภาษาไทย
 """
 
-    try:
-        response = requests.post(
-            OPENROUTER_URL,
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "HTTP-Referer": "https://personal-data-bot-production.up.railway.app",
-                "X-Title": "Personal Data Bot",
-            },
-            json={
-                "model": "deepseek/deepseek-v4-flash",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,
-                "max_tokens": 300,
-            },
-            timeout=30,
-        )
+    for attempt in range(2):
+        try:
+            response = requests.post(
+                OPENROUTER_URL,
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "HTTP-Referer": "https://personal-data-bot-production.up.railway.app",
+                    "X-Title": "Personal Data Bot",
+                },
+                json={
+                    "model": OPENROUTER_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.3,
+                    "max_tokens": 300,
+                },
+                timeout=30,
+            )
 
-        logger.debug(f"[parser] Response status: {response.status_code}")
+            logger.debug(f"[parser] Response status: {response.status_code}")
 
-        if response.status_code != 200:
-            logger.warning(f"[parser] OpenRouter HTTP {response.status_code}: {response.text[:300]}")
-            return None
+            if response.status_code != 200:
+                logger.warning(f"[parser] OpenRouter HTTP {response.status_code}: {response.text[:300]}")
+                continue
 
-        result = response.json()
-        content = result["choices"][0]["message"]["content"].strip()
-        logger.debug(f"[parser] Content: {content}")
+            result = response.json()
+            content = result["choices"][0]["message"]["content"].strip()
+            logger.debug(f"[parser] Content: {content}")
 
-        # Clean markdown if present
-        if "```" in content:
-            content = content.split("```")[1].strip()
-            if content.startswith("json"):
-                content = content[4:].strip()
+            data = _extract_json(content)
 
-        data = json.loads(content)
+            if not data.get("amount") or data.get("amount") == 0:
+                return None
 
-        if not data.get("amount") or data.get("amount") == 0:
-            return None
+            amount, tx_type = _normalize_amount(data)
 
-        return {
-            "date": data.get("date") or _today_th(),
-            "amount": data.get("amount"),
-            "type": data.get("type", "expense"),
-            "category": data.get("category", "other"),
-            "merchant": data.get("merchant"),
-            "note": data.get("note"),
-            "raw_input": text,
-        }
+            return {
+                "date": data.get("date") or _today_th(),
+                "amount": amount,
+                "type": tx_type,
+                "category": data.get("category", "other"),
+                "merchant": data.get("merchant"),
+                "note": data.get("note"),
+                "raw_input": text,
+            }
 
-    except requests.exceptions.Timeout:
-        logger.warning("[parser] OpenRouter timeout!")
-        return None
-    except Exception as e:
-        logger.exception(f"[parser] Parse error: {e}")
-        return None
+        except requests.exceptions.Timeout:
+            logger.warning("[parser] OpenRouter timeout!")
+            continue
+        except Exception as e:
+            logger.warning(f"[parser] Parse error (attempt {attempt + 1}): {e}")
+            continue
+
+    return None
 
 def parse_image(file_path):
     """Parse receipt image using vision model"""
@@ -194,7 +212,7 @@ def parse_image(file_path):
                 "X-Title": "Personal Data Bot",
             },
             json={
-                "model": "deepseek/deepseek-v4-flash",
+                "model": OPENROUTER_MODEL,
                 "messages": [
                     {
                         "role": "user",
@@ -225,12 +243,7 @@ def parse_image(file_path):
         result = resp.json()
         content = result["choices"][0]["message"]["content"].strip()
 
-        if "```" in content:
-            content = content.split("```")[1].strip()
-            if content.startswith("json"):
-                content = content[4:].strip()
-
-        data = json.loads(content)
+        data = _extract_json(content)
 
         if not data.get("amount"):
             return None
