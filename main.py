@@ -2,11 +2,14 @@ import os
 import json
 import logging
 from flask import Flask, request
-from transaction_parser import parse_transaction, classify_intent
-from datetime import datetime
-from sheets import write_transaction, query_transactions, compute_daily_totals
-from query import format_monthly_summary, format_comparison
-from tz import TH_TZ
+from transaction_parser import (
+    parse_transaction,
+    analyze_message,
+    answer_query,
+    record_from_data,
+)
+from sheets import write_transaction, query_transactions
+from query import build_query_context
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -48,51 +51,16 @@ def webhook():
                     send_message(chat_id, "❌ อ่านรูปไม่ได้ ลองใหม่หรือพิมพ์มือ")
 
         elif text:
-            intent = classify_intent(text)
-            logger.info(f"[intent] '{text}' → {intent}")
+            analysis = analyze_message(text)
+            kind = analysis["kind"]
+            logger.info(f"[analyze] '{text}' → {kind}")
 
-            if intent == "query_today":
-                date_str = datetime.now(TH_TZ).strftime("%Y-%m-%d")
-                income, expense = compute_daily_totals(date_str)
-                if income == 0 and expense == 0:
-                    send_message(chat_id, f"📭 วันที่ {date_str} ยังไม่มีรายการ")
-                else:
-                    net = income - expense
-                    sign = "🟢" if net >= 0 else "🔴"
-                    send_message(chat_id, (
-                        f"📊 สรุปวันที่ {date_str}\n\n"
-                        f"💰 รายรับ:  {income:,.0f} บาท\n"
-                        f"💸 รายจ่าย: {expense:,.0f} บาท\n"
-                        f"──────────────────\n"
-                        f"{sign} คงเหลือ: {net:,.0f} บาท"
-                    ))
-
-            elif intent == "query_month":
-                transactions = query_transactions()
-                send_message(chat_id, format_monthly_summary(transactions))
-
-            elif intent == "query_compare":
-                transactions = query_transactions()
-                send_message(chat_id, format_comparison(transactions))
-
-            elif intent == "help":
-                send_message(chat_id, (
-                    "📝 บันทึกรายการ:\n"
-                    "  \"กาแฟ 65\" → รายจ่าย\n"
-                    "  \"รับเงิน 5000\" → รายรับ\n"
-                    "  \"ข้าว 80 ร้านแมว\"\n\n"
-                    "📸 ส่งรูปสลิป → อ่านอัตโนมัติ\n\n"
-                    "📊 ถามได้เลยภาษาพูด:\n"
-                    "  \"วันนี้ใช้เงินไปเท่าไหร่\"\n"
-                    "  \"เดือนนี้จ่ายไปกี่บาท\"\n"
-                    "  \"เทียบเดือนที่แล้ว\""
-                ))
-
-            elif intent == "api_error":
-                send_message(chat_id, "🤖 ระบบ AI ขัดข้องชั่วคราว ลองพิมพ์ใหม่อีกครั้งใน 1 นาที")
-
-            elif intent == "save_transaction":
-                result = parse_transaction(text)
+            if kind == "save":
+                # transaction was parsed in the same call; fall back to a
+                # dedicated parse only if the merged parse came back empty.
+                result = record_from_data(analysis.get("transaction"), text)
+                if not result:
+                    result = parse_transaction(text)
                 if result:
                     if write_transaction(result):
                         send_message(chat_id, f"✅ บันทึกเสร็จ\n{format_result(result)}")
@@ -101,7 +69,33 @@ def webhook():
                 else:
                     send_message(chat_id, "❌ ไม่เข้าใจ ลองใหม่เช่น 'กาแฟ 65' หรือ 'รับเงิน 5000'")
 
-            else:
+            elif kind == "query":
+                transactions = query_transactions()
+                context = build_query_context(transactions)
+                answer = answer_query(text, context)
+                if answer:
+                    send_message(chat_id, answer)
+                else:
+                    send_message(chat_id, "🤖 ระบบ AI ขัดข้องชั่วคราว ลองพิมพ์ใหม่อีกครั้งใน 1 นาที")
+
+            elif kind == "help":
+                send_message(chat_id, (
+                    "📝 บันทึกรายการ:\n"
+                    "  \"กาแฟ 65\" → รายจ่าย\n"
+                    "  \"รับเงิน 5000\" → รายรับ\n"
+                    "  \"ข้าว 80 ร้านแมว\"\n\n"
+                    "📸 ส่งรูปสลิป → อ่านอัตโนมัติ\n\n"
+                    "📊 ถามได้เลยภาษาพูด:\n"
+                    "  \"วันนี้ใช้เงินไปเท่าไหร่\"\n"
+                    "  \"เดือนนี้วันไหนใช้เยอะสุด\"\n"
+                    "  \"ค่ากาแฟเดือนนี้กี่บาท\"\n"
+                    "  \"เทียบเดือนที่แล้ว\""
+                ))
+
+            elif kind == "api_error":
+                send_message(chat_id, "🤖 ระบบ AI ขัดข้องชั่วคราว ลองพิมพ์ใหม่อีกครั้งใน 1 นาที")
+
+            else:  # unknown
                 send_message(chat_id, "❓ ไม่เข้าใจ ลองพิมพ์ help ดูวิธีใช้")
 
         else:

@@ -31,50 +31,134 @@ def _normalize_amount(data):
         return amount, "income"
     return -amount, "expense"
 
-def classify_intent(text):
-    """Classify user message intent. Returns one of:
-    query_today | query_month | query_compare | save_transaction | help | unknown | api_error
-    """
-    prompt = f"""จำแนกความตั้งใจของข้อความภาษาไทยนี้: "{text}"
+def _post_openrouter(messages, max_tokens, temperature, timeout):
+    """Single OpenRouter chat call. Returns the message content string, or raises."""
+    response = requests.post(
+        OPENROUTER_URL,
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "HTTP-Referer": "https://personal-data-bot-production.up.railway.app",
+            "X-Title": "Personal Data Bot",
+        },
+        json={
+            "model": OPENROUTER_MODEL,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        },
+        timeout=timeout,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"HTTP {response.status_code}: {response.text[:300]}")
+    return response.json()["choices"][0]["message"]["content"].strip()
 
-ตอบด้วย label เดียวเท่านั้น (ห้ามมีคำอื่น):
-- query_today  → ถามยอดวันนี้ เช่น "วันนี้ใช้ไปเท่าไหร่" "สรุปวันนี้" "ใช้เงินไปกี่บาทแล้ว"
-- query_month  → ถามยอดเดือนนี้ เช่น "เดือนนี้จ่ายไปเท่าไหร่" "สรุปเดือนนี้" "ค่าใช้จ่ายเดือนนี้"
-- query_compare → เปรียบเทียบเดือน เช่น "เทียบเดือนที่แล้ว" "เดือนนี้กับเดือนก่อน"
-- save_transaction → บันทึกรายการเงิน เช่น "กาแฟ 65" "รับเงินเดือน 30000" "ข้าว 80"
-- help → ขอความช่วยเหลือ เช่น "help" "วิธีใช้" "ใช้ยังไง"
-- unknown → ไม่ตรงกับอะไรข้างบน"""
+
+def record_from_data(data, raw_input):
+    """Turn a parsed transaction dict into a normalized record, or None if invalid."""
+    if not data or not data.get("amount") or data.get("amount") == 0:
+        return None
+    amount, tx_type = _normalize_amount(data)
+    return {
+        "date": data.get("date") or _today_th(),
+        "amount": amount,
+        "type": tx_type,
+        "category": data.get("category", "other"),
+        "merchant": data.get("merchant"),
+        "note": data.get("note"),
+        "raw_input": raw_input,
+    }
+
+
+def analyze_message(text):
+    """Single LLM call that classifies intent AND parses a transaction if it's a save.
+
+    Returns one of:
+      {"kind": "save",    "transaction": {...}}   # parse a money entry
+      {"kind": "query",   "transaction": None}    # any analytical question
+      {"kind": "help",    "transaction": None}
+      {"kind": "unknown", "transaction": None}
+      {"kind": "api_error","transaction": None}   # only after retries fail
+    """
+    today = _today_th()
+    prompt = f"""วันนี้คือวันที่ {today} (YYYY-MM-DD, เวลาประเทศไทย)
+
+ข้อความจากผู้ใช้: "{text}"
+
+งานของคุณ: จำแนกข้อความนี้ แล้วตอบเป็น JSON เท่านั้น (ห้ามมี markdown หรือคำอธิบาย)
+
+ประเภท (kind):
+- "save"  = บันทึกรายการเงิน เช่น "กาแฟ 65", "รับเงินเดือน 30000", "ข้าว 80 ร้านแมว"
+- "query" = ถาม/ขอสรุป/วิเคราะห์ข้อมูลการเงิน เช่น "เดือนนี้ใช้ไปเท่าไหร่", "วันไหนใช้เยอะสุด", "ค่ากาแฟเดือนนี้กี่บาท", "เฉลี่ยวันละเท่าไหร่", "เทียบเดือนที่แล้ว", "สรุปวันนี้"
+- "help"  = ขอวิธีใช้ เช่น "help", "ใช้ยังไง"
+- "unknown" = ไม่เกี่ยวกับการเงินเลย
+
+รูปแบบ JSON:
+{{
+  "kind": "save" | "query" | "help" | "unknown",
+  "transaction": {{...}} หรือ null
+}}
+
+ถ้า kind = "save" เท่านั้น ให้ transaction เป็น:
+{{
+  "amount": ตัวเลขบวกเสมอ,
+  "type": "income" หรือ "expense",
+  "category": "food|transport|shopping|bills|entertainment|health|salary|other",
+  "merchant": "สิ่งที่ซื้อหรือร้าน หรือ null",
+  "date": "{today}",
+  "note": "บันทึกสั้นๆ ภาษาไทย หรือ null"
+}}
+
+กฎสำหรับ save:
+- ถ้ามีคำว่า "รับ", "ได้เงิน", "เงินเดือน", "โอนเข้า" = income, นอกนั้น = expense
+- merchant = สิ่งที่ซื้อ เช่น "กาแฟ 65" -> "กาแฟ"
+- ถ้า kind ไม่ใช่ save ให้ transaction = null"""
 
     for attempt in range(2):
         try:
-            response = requests.post(
-                OPENROUTER_URL,
-                headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                    "HTTP-Referer": "https://personal-data-bot-production.up.railway.app",
-                    "X-Title": "Personal Data Bot",
-                },
-                json={
-                    "model": OPENROUTER_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.1,
-                    "max_tokens": 20,
-                },
-                timeout=15,
+            content = _post_openrouter(
+                [{"role": "user", "content": prompt}],
+                max_tokens=300, temperature=0.1, timeout=20,
             )
-            if response.status_code != 200:
-                logger.warning(f"[intent] OpenRouter HTTP {response.status_code}: {response.text[:300]}")
-                continue
-            content = response.json()["choices"][0]["message"]["content"].strip().lower()
-            valid = {"query_today", "query_month", "query_compare", "save_transaction", "help", "unknown"}
-            for label in valid:
-                if label in content:
-                    return label
-            return "save_transaction"
+            data = _extract_json(content)
+            kind = str(data.get("kind") or "").lower().strip()
+            if kind not in {"save", "query", "help", "unknown"}:
+                kind = "save"  # safest default: most messages are entries
+            return {"kind": kind, "transaction": data.get("transaction")}
         except Exception as e:
-            logger.warning(f"[intent] error (attempt {attempt + 1}): {e}")
+            logger.warning(f"[analyze] error (attempt {attempt + 1}): {e}")
             continue
-    return "api_error"
+    return {"kind": "api_error", "transaction": None}
+
+
+def answer_query(question, context):
+    """Answer an analytical money question from pre-aggregated context (small JSON).
+    Returns a Thai answer string, or None on failure."""
+    today = _today_th()
+    prompt = f"""วันนี้คือวันที่ {today} (เวลาประเทศไทย)
+
+ผู้ใช้ถาม: "{question}"
+
+ข้อมูลการเงินที่สรุปไว้แล้ว (หน่วย: บาท) เป็น JSON:
+{json.dumps(context, ensure_ascii=False)}
+
+ตอบคำถามของผู้ใช้จากข้อมูลนี้เท่านั้น เป็นภาษาไทย สั้น กระชับ ตรงคำถาม:
+- ใช้เฉพาะตัวเลขที่อยู่ในข้อมูล ห้ามแต่งตัวเลขเอง
+- ถ้าถาม "วันไหนใช้เยอะสุด" ให้ดู daily แล้วบอกวันที่ + จำนวนเงิน
+- ถ้าถามหมวด/ร้าน ให้ดู by_category / by_merchant
+- ใส่คอมมาในตัวเลข เช่น 1,234 บาท
+- ถ้าข้อมูลไม่พอจะตอบ บอกตรงๆ ว่ายังไม่มีข้อมูล
+- ตอบเป็นข้อความล้วน ไม่ต้องมี JSON หรือ markdown"""
+
+    for attempt in range(2):
+        try:
+            return _post_openrouter(
+                [{"role": "user", "content": prompt}],
+                max_tokens=400, temperature=0.3, timeout=25,
+            )
+        except Exception as e:
+            logger.warning(f"[answer] error (attempt {attempt + 1}): {e}")
+            continue
+    return None
 
 
 def parse_transaction(text=None, file_path=None, is_image=False):
